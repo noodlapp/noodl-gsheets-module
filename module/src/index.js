@@ -13,7 +13,8 @@ function _addSheetToSchemas(id,sheet,cb) {
 			"boolean":{type:"Boolean"},
 			"string":{type:"String"},
 			"number":{type:"Number"},
-			"date":{type:"Date"}
+			"date":{type:"Date"},
+			"datetime":{type:"Date"}
 		}
 
 		for(var i = 0; i < cols.length; i++) {
@@ -31,23 +32,37 @@ const QuerySheetNode = Noodl.defineNode({
 	name:'noodl.gsheets.QuerySheetNode',
 	displayName:'Query Sheet',
 	color:'green',
+	initialize() {
+		this.queryParameters = {}
+	},
 	inputs:{
 		sheetId:{displayName:'Document Id',group:'Sheet Source',type:'string'},
-		sheetName:{displayName:'Sheet Name',group:'Sheet Source',type:'string'},
+		sheetName:{displayName:'Sheet Name',group:'Sheet Source',type:'string'}
 	},
 	outputs:{
 		result:{displayName:'Items',group:'General',type:'array'},
 		count:{displayName:'Count',group:'General',type:'array'},
-		firstItemId:{displayName:'First Item Id',group:'General',type:'array'}
+		firstItemId:{displayName:'First Item Id',group:'General',type:'array'},
+
+		success:{displayName:'Success',group:'Events',type:'signal'},
+		failure:{displayName:'Failure',group:'Events',type:'signal'},
+		error:{displayName:'Error',group:'Error',type:'string'}
+	},
+	signals:{
+		Do() {
+			this.scheduleQuery()
+		}
 	},
 	changed:{	
 		sheetId() {
 			this.cols = undefined
-			this.scheduleQuery()
+			if(this.isInputConnected('Do') === false)
+				this.scheduleQuery()
 		},
 		sheetName() {
 			this.cols = undefined
-			this.scheduleQuery()
+			if(this.isInputConnected('Do') === false)
+				this.scheduleQuery()
 		}
 	},
 	methods:{
@@ -59,6 +74,10 @@ const QuerySheetNode = Noodl.defineNode({
 				this.runQuery()
 			})
 		},
+		setError: function (err) {
+            this.setOutputs({error:err})
+            this.sendSignalOnOutput('failure');
+        },
 	 	_formatFilter(query,options) {
 			var inputs = options.queryParameters;
 	   
@@ -66,11 +85,11 @@ const QuerySheetNode = Noodl.defineNode({
 			   if(query.rules.length === 0) return;
 			   else if(query.rules.length === 1) return this._formatFilter(query.rules[0],options)
 			   else {
-				   const _res = '('
+				   var _res = '('
 				   query.rules.forEach((r,idx) => {
 					   var cond = this._formatFilter(r,options)
 					   if(cond !== undefined) _res += cond
-					   if(idx < query.rules.length-1) _res += query.combinator
+					   if(idx < query.rules.length-1) _res += query.combinator + ' '
 				   })
 				   _res += ')'
 	   
@@ -107,11 +126,15 @@ const QuerySheetNode = Noodl.defineNode({
 			})
 		},
 		runQuery() {
+			if(this.inputs.sheetId === undefined || this.inputs.sheetName === undefined) {
+				return
+			}
+
 			this._getColumns((cols) => {
 				// Generate the query from the visual filter
 				let query
 				if(this.filter !== undefined) {
-					const filter = this._formatFilter(this.filter,{cols})
+					const filter = this._formatFilter(this.filter,{cols,queryParameters:this.queryParameters})
 					if(filter !== undefined) query = 'where ' + filter + ' '
 				}
 
@@ -127,14 +150,24 @@ const QuerySheetNode = Noodl.defineNode({
 				}
 
 				const parser = new PublicGoogleSheetsParser(this.inputs.sheetId,this.inputs.sheetName,query)
-				parser.parse().then(({rows,cols}) => {
+				parser.parse().then(({rows,_cols}) => {
 					const results = Noodl.Array.get()
+
 					results.set(rows.map((r) => {
+						// Extract Id 
 						let _id
 						if(this.useColumnForId !== undefined && this.useColumnForId !== '__none__') {
 							_id = r[this.useColumnForId]
 							delete r[this.useColumnForId]
 						}
+
+						// Convert dates
+						for(var key in r) {
+							if(cols[key] && (cols[key].type=='date' || cols[key].type=='datetime')) {
+								r[key] = eval('new ' + r[key])
+							}
+						}
+
 						let obj = Noodl.Object.get(_id)
 						obj.setAll(r)
 						return obj
@@ -145,6 +178,7 @@ const QuerySheetNode = Noodl.defineNode({
 						count:results.size(),
 						firstItemId:(results.size() > 0)?results.get(0).getId():undefined
 					})
+					this.sendSignalOnOutput('success')
 				})
 			})
 		},
@@ -176,30 +210,46 @@ const QuerySheetNode = Noodl.defineNode({
 			if(name === 'columnForId') this.registerInput(name, {
 				set: this.setColumnForId.bind(this)
 			})
+
+			if(name.startsWith('qp-')) return this.registerInput(name, {
+                set: this.setQueryParameter.bind(this, name.substring('qp-'.length))
+            })
 		},		
 		setFilter(value) {
 			this.filter = value
-			this.scheduleQuery()
+			if(this.isInputConnected('Do') === false)
+				this.scheduleQuery()
 		},
 		setSorting(value) {
 			this.sorting = value
-			this.scheduleQuery()
+			if(this.isInputConnected('Do') === false)
+				this.scheduleQuery()
 		},
 		setEnableLimit(value) {
 			this.enableLimit = value
-			this.scheduleQuery()
+			if(this.isInputConnected('Do') === false)
+				this.scheduleQuery()
 		},
 		setLimit(value) {
 			this.limit = value
-			this.scheduleQuery()
+			if(this.isInputConnected('Do') === false)
+				this.scheduleQuery()
 		},
 		setSkip(value) {
 			this.skip = value
-			this.scheduleQuery()
+			if(this.isInputConnected('Do') === false)
+				this.scheduleQuery()
 		},
 		setColumnForId(value) {
 			this.useColumnForId = value
-			this.scheduleQuery()
+			if(this.isInputConnected('Do') === false)
+				this.scheduleQuery()
+		},
+		setQueryParameter(name,value) {
+			this.queryParameters[name] = value;
+
+            if(this.isInputConnected('Do') === false)
+                this.scheduleQuery()
 		}
 	},
 	setup: function (context, graphModel) {
@@ -244,33 +294,65 @@ const QuerySheetNode = Noodl.defineNode({
 					})
 				}
 
-				const schema = {properties:_schemas[node.parameters.sheetName||'_Default']}
+				if(node.parameters['sheetId'] === undefined || node.parameters['sheetName'] === undefined) {
+					context.editorConnection.sendWarning(node.component.name, node.id, 'missing-sheet', {
+						message: 'You must specify the Id of the Google Sheet document and the sheet name.'
+					})
+				}
+				else {
+					context.editorConnection.clearWarning(node.component.name, node.id, 'missing-sheet');
+				}
 
-				ports.push({
-                    name:'visualFilter',
-                    plug:'input',
-                    type:{name:'query-filter',schema:schema,allowEditOnly:true},
-                    displayName:'Filter',
-                    group:'Filter',
-                })
+				if(node.parameters['sheetId'] !== undefined && node.parameters['sheetName'] !== undefined) {
+					const schema = {properties:_schemas[node.parameters.sheetName||'_Default']}
 
-                ports.push({
-                    name:'visualSort',
-                    plug:'input',
-                    type:{name:'query-sorting',schema:schema,allowEditOnly:true},
-                    displayName:'Sort',
-                    group:'Sorting',
-                })
+					ports.push({
+						name:'visualFilter',
+						plug:'input',
+						type:{name:'query-filter',schema:schema,allowEditOnly:true},
+						displayName:'Filter',
+						group:'Filter',
+					})
 
-				const columnForIdEnums = [{label:'Unique id',value:'__none__'}].concat(Object.keys(schema.properties).map(k => ({value:k,label:k})))
-				ports.push({
-					name:'columnForId',
-					plug:'input',
-					type:{name:'enum',enums:columnForIdEnums},
-					displayName:'Use Column For Id',
-					group:'Sheet Source',
-					default:'__none__'
-				})
+					if(node.parameters.visualFilter !== undefined) {
+						// Find all input ports
+						const uniqueInputs = {}
+						function _collectInputs(query) {
+							if(query === undefined) return;
+							if(query.rules !== undefined) query.rules.forEach((r) => _collectInputs(r))
+							else if(query.input !== undefined) uniqueInputs[query.input] = true;
+						}
+		
+						_collectInputs(node.parameters.visualFilter)
+						Object.keys(uniqueInputs).forEach((input) => {
+							ports.push({
+								name:'qp-' + input,
+								plug:'input',
+								type:'*',
+								displayName:input,
+								group:'Query Parameters',
+							})
+						})
+					}
+
+					ports.push({
+						name:'visualSort',
+						plug:'input',
+						type:{name:'query-sorting',schema:schema,allowEditOnly:true},
+						displayName:'Sort',
+						group:'Sorting',
+					})
+
+					const columnForIdEnums = [{label:'Unique id',value:'__none__'}].concat(Object.keys(schema.properties).map(k => ({value:k,label:k})))
+					ports.push({
+						name:'columnForId',
+						plug:'input',
+						type:{name:'enum',enums:columnForIdEnums},
+						displayName:'Use Column For Id',
+						group:'Sheet Source',
+						default:'__none__'
+					})
+				}
 
 				context.editorConnection.sendDynamicPorts(node.id, ports);
 			}
@@ -288,7 +370,7 @@ const QuerySheetNode = Noodl.defineNode({
 					})
 				}
 
-				if(event.name === "enableLimit") updatePorts();
+				if(event.name === "enableLimit" || event.name === "visualFilter") updatePorts();
 			})
 		})
 	}
@@ -296,7 +378,7 @@ const QuerySheetNode = Noodl.defineNode({
 
 const QuerySheetUniqueColumnNode = Noodl.defineNode({
 	name:'noodl.gsheets.QuerySheetUniqueColumnNode',
-	displayName:'Query Sheet Unique',
+	displayName:'Get Unique Values',
 	color:'green',
 	inputs:{
 		sheetId:{displayName:'Document Id',group:'Sheet Source',type:'string'},
@@ -305,16 +387,27 @@ const QuerySheetUniqueColumnNode = Noodl.defineNode({
 	outputs:{
 		result:{displayName:'Items',group:'General',type:'array'},
 		count:{displayName:'Count',group:'General',type:'array'},
-		firstItemId:{displayName:'First Item Id',group:'General',type:'array'}
+		firstItemId:{displayName:'First Item Id',group:'General',type:'array'},
+
+		success:{displayName:'Success',group:'Events',type:'signal'},
+		failure:{displayName:'Failure',group:'Events',type:'signal'},
+		error:{displayName:'Error',group:'Error',type:'string'}
+	},
+	signals:{
+		Do() {
+			this.scheduleQuery()
+		}
 	},
 	changed:{	
 		sheetId() {
 			this.cols = undefined
-			this.scheduleQuery()
+			if(this.isInputConnected('Do') === false)
+				this.scheduleQuery()
 		},
 		sheetName() {
 			this.cols = undefined
-			this.scheduleQuery()
+			if(this.isInputConnected('Do') === false)
+				this.scheduleQuery()
 		}
 	},
 	methods:{
@@ -342,7 +435,7 @@ const QuerySheetUniqueColumnNode = Noodl.defineNode({
 				parser.parse().then(({rows,cols}) => {
 					const results = Noodl.Array.get()
 					results.set(rows.map((r) => {
-						let obj = Noodl.Object.create({Value:r[this.column]})
+						let obj = Noodl.Object.create({Value:r[this.column],Label:r[this.column]})
 						return obj
 					}))
 	
@@ -351,6 +444,7 @@ const QuerySheetUniqueColumnNode = Noodl.defineNode({
 						count:results.size(),
 						firstItemId:(results.size() > 0)?results.get(0).getId():undefined
 					})
+					this.sendSignalOnOutput('success')
 				})
 			})
 		},
@@ -365,7 +459,8 @@ const QuerySheetUniqueColumnNode = Noodl.defineNode({
 		},		
 		setColumn(value) {
 			this.column = value
-			this.scheduleQuery()
+			if(this.isInputConnected('Do') === false)
+				this.scheduleQuery()
 		}
 	},
 	setup: function (context, graphModel) {
@@ -381,18 +476,29 @@ const QuerySheetUniqueColumnNode = Noodl.defineNode({
 			function updatePorts() {
 				var ports = []
 
-				const schema = {properties:_schemas[node.parameters.sheetName||'_Default']}
-
-				const columnForIdEnums = Object.keys(schema.properties).map(k => ({value:k,label:k}))
-				if(columnForIdEnums.length > 0) {
-					ports.push({
-						name:'column',
-						plug:'input',
-						type:{name:'enum',enums:columnForIdEnums},
-						displayName:'Column',
-						group:'Sheet Source',
-						default:columnForIdEnums[0].value
+				if(node.parameters['sheetId'] === undefined || node.parameters['sheetName'] === undefined) {
+					context.editorConnection.sendWarning(node.component.name, node.id, 'missing-sheet', {
+						message: 'You must specify the Id of the Google Sheet document and the sheet name.'
 					})
+				}
+				else {
+					context.editorConnection.clearWarning(node.component.name, node.id, 'missing-sheet');
+				}
+
+				if(node.parameters['sheetId'] !== undefined && node.parameters['sheetName'] !== undefined) {
+					const schema = {properties:_schemas[node.parameters.sheetName||'_Default']}
+
+					const columnForIdEnums = Object.keys(schema.properties).map(k => ({value:k,label:k}))
+					if(columnForIdEnums.length > 0) {
+						ports.push({
+							name:'column',
+							plug:'input',
+							type:{name:'enum',enums:columnForIdEnums},
+							displayName:'Column',
+							group:'Sheet Source',
+							default:columnForIdEnums[0].value
+						})
+					}
 				}
 
 				context.editorConnection.sendDynamicPorts(node.id, ports);
@@ -420,7 +526,7 @@ const SheetRowNode = Noodl.defineNode({
 	displayName:'Sheet Row',
 	color:'green',
 	inputs:{
-		rowId:{type:'string',displayName:'Row Id',allowConnectionsOnly:true}
+		rowId:{type:{name:'string',allowConnectionsOnly:true},displayName:'Row Id'}
 	},
 	outputs:{
 	},
@@ -440,6 +546,15 @@ const SheetRowNode = Noodl.defineNode({
                 getter: this.getColumnValue.bind(this, name.substring('prop-'.length))
             })
 		},	
+		registerInputIfNeeded(name) {
+			if (this.hasInput(name)) {
+				return;
+			}
+
+			if (name === 'sheet') this.registerInput(name, {
+                set: () => {} // Ignore, just used for getting outputs
+            })
+		},	
 		getColumnValue(name) {
 			if(this.rowObject === undefined) return
 			return this.rowObject.get(name)
@@ -447,7 +562,10 @@ const SheetRowNode = Noodl.defineNode({
 		updateOutputs() {
 			if(this.rowObject === undefined) return
 			const out = {}
-			Object.keys(this.rowObject.data).forEach(k => out['prop-'+k] = this.rowObject[k])
+			Object.keys(this.rowObject.data).forEach(k => {
+				if(this.hasOutput('prop-'+k))
+					out['prop-'+k] = this.rowObject[k]
+			})
 			this.setOutputs(out)
 		}
 	},
@@ -476,23 +594,27 @@ const SheetRowNode = Noodl.defineNode({
 					})
 				}
 
-				const schema = _schemas[node.parameters['sheet'] || '_Default']
-				if(schema !== undefined) {
-					Object.keys(schema).forEach(prop => {
-						const type = schema[prop].type
-						const _types = {
-							"Boolean":"boolean",
-							"Number":"number",
-							"String":"string"
+				const sheet = (sheets.length === 1)?sheets[0].value:node.parameters['sheet']
+				if(sheet !== undefined) {
+					const schema = _schemas[sheet]
+					if(schema !== undefined) {
+						for(let prop in schema) {
+							const type = schema[prop].type
+							const _types = {
+								"Boolean":"boolean",
+								"Number":"number",
+								"String":"string",
+								"Date":"date"
+							}
+							ports.push({
+								name:'prop-'+prop,
+								plug:'output',
+								type:_types[type]||'*',
+								displayName:prop,
+								group:'Columns'
+							})
 						}
-						ports.push({
-							name:'prop-'+prop,
-							plug:'output',
-							type:_types[type]||'*',
-							displayName:prop,
-							group:'Columns'
-						})
-					})
+					}
 				}
 
 				context.editorConnection.sendDynamicPorts(node.id, ports);
