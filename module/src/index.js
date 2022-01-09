@@ -28,6 +28,45 @@ function _addSheetToSchemas(id,sheet,cb) {
 	})
 }
 
+function _formatFilter(query,options) {
+	var inputs = options.queryParameters;
+
+   if(query.combinator !== undefined && query.rules !== undefined) {
+	   if(query.rules.length === 0) return;
+	   else if(query.rules.length === 1) return _formatFilter(query.rules[0],options)
+	   else {
+		   var _res = '('
+		   query.rules.forEach((r,idx) => {
+			   var cond = _formatFilter(r,options)
+			   if(cond !== undefined) _res += cond
+			   if(idx < query.rules.length-1) _res += query.combinator + ' '
+		   })
+		   _res += ')'
+
+		   return _res;
+	   }
+   }
+   else {
+	   var cond;
+	   var value = query.input!==undefined?inputs[query.input]:query.value;
+
+	   if(typeof value === 'string') value = "'" + value + "'"
+
+	   if(query.operator === 'exist') cond = 'is not null'
+	   else if(query.operator === 'not exist') cond = 'is null'
+	   else if(query.operator === 'greater than') cond = '> ' + value
+	   else if(query.operator === 'greater than or equal to') cond = '>= ' + value
+	   else if(query.operator === 'less than') cond = '< ' + value
+	   else if(query.operator === 'less than or equal to') cond = '<= ' + value
+	   else if(query.operator === 'equal to') cond = '= ' + value
+	   else if(query.operator === 'not equal to') cond = '!= ' + value
+
+	   const _res = options.cols[query.property].id + " " + cond
+
+	   return _res;
+   }
+}
+
 const QuerySheetNode = Noodl.defineNode({
 	name:'noodl.gsheets.QuerySheetNode',
 	displayName:'Query Sheet',
@@ -78,44 +117,6 @@ const QuerySheetNode = Noodl.defineNode({
             this.setOutputs({error:err})
             this.sendSignalOnOutput('failure');
         },
-	 	_formatFilter(query,options) {
-			var inputs = options.queryParameters;
-	   
-		   if(query.combinator !== undefined && query.rules !== undefined) {
-			   if(query.rules.length === 0) return;
-			   else if(query.rules.length === 1) return this._formatFilter(query.rules[0],options)
-			   else {
-				   var _res = '('
-				   query.rules.forEach((r,idx) => {
-					   var cond = this._formatFilter(r,options)
-					   if(cond !== undefined) _res += cond
-					   if(idx < query.rules.length-1) _res += query.combinator + ' '
-				   })
-				   _res += ')'
-	   
-				   return _res;
-			   }
-		   }
-		   else {
-			   var cond;
-			   var value = query.input!==undefined?inputs[query.input]:query.value;
-
-			   if(typeof value === 'string') value = "'" + value + "'"
- 	   
-			   if(query.operator === 'exist') cond = 'is not null'
-			   else if(query.operator === 'not exist') cond = 'is null'
-			   else if(query.operator === 'greater than') cond = '> ' + value
-			   else if(query.operator === 'greater than or equal to') cond = '>= ' + value
-			   else if(query.operator === 'less than') cond = '< ' + value
-			   else if(query.operator === 'less than or equal to') cond = '<= ' + value
-			   else if(query.operator === 'equal to') cond = '= ' + value
-			   else if(query.operator === 'not equal to') cond = '!= ' + value
-	   
-			   const _res = options.cols[query.property].id + " " + cond
-	   
-			   return _res;
-		   }
-		},
 		_getColumns(cb) {
 			if(this.cols !== undefined) return cb(this.cols)
 			const parser = new PublicGoogleSheetsParser(this.inputs.sheetId,this.inputs.sheetName,"limit 0")
@@ -134,7 +135,7 @@ const QuerySheetNode = Noodl.defineNode({
 				// Generate the query from the visual filter
 				let query
 				if(this.filter !== undefined) {
-					const filter = this._formatFilter(this.filter,{cols,queryParameters:this.queryParameters})
+					const filter = _formatFilter(this.filter,{cols,queryParameters:this.queryParameters})
 					if(filter !== undefined) query = 'where ' + filter + ' '
 				}
 
@@ -376,19 +377,20 @@ const QuerySheetNode = Noodl.defineNode({
 	}
 })
 
-const QuerySheetUniqueColumnNode = Noodl.defineNode({
-	name:'noodl.gsheets.QuerySheetUniqueColumnNode',
-	displayName:'Get Unique Values',
+const QuerySheetAggregateNode = Noodl.defineNode({
+	name:'noodl.gsheets.QuerySheetAggregateNode',
+	displayName:'Query Sheet Aggregate',
 	color:'green',
 	inputs:{
 		sheetId:{displayName:'Document Id',group:'Sheet Source',type:'string'},
 		sheetName:{displayName:'Sheet Name',group:'Sheet Source',type:'string'},
+		aggType:{displayName:'Aggregate',
+			type:{name:'enum',enums:[{label:'Unique',value:'unique'}, {label:'Count',value:'count'}, {label:'Min',value:'min'}, {label:'Max',value:'max'}]},
+			default:'unique',
+			group:'General'
+		}
 	},
 	outputs:{
-		result:{displayName:'Items',group:'General',type:'array'},
-		count:{displayName:'Count',group:'General',type:'array'},
-		firstItemId:{displayName:'First Item Id',group:'General',type:'array'},
-
 		success:{displayName:'Success',group:'Events',type:'signal'},
 		failure:{displayName:'Failure',group:'Events',type:'signal'},
 		error:{displayName:'Error',group:'Error',type:'string'}
@@ -408,6 +410,10 @@ const QuerySheetUniqueColumnNode = Noodl.defineNode({
 			this.cols = undefined
 			if(this.isInputConnected('Do') === false)
 				this.scheduleQuery()
+		},
+		aggType() {
+			if(this.isInputConnected('Do') === false)
+				this.scheduleQuery()	
 		}
 	},
 	methods:{
@@ -430,20 +436,36 @@ const QuerySheetUniqueColumnNode = Noodl.defineNode({
 		},
 		runQuery() {
 			this._getColumns((cols) => {
-				const col = cols[this.column].id
-				const parser = new PublicGoogleSheetsParser(this.inputs.sheetId,this.inputs.sheetName,`select ${col}, count(${col}) group by ${col}`)
+				let where = ''
+				if(this.filter !== undefined) {
+					const filter = _formatFilter(this.filter,{cols,queryParameters:this.queryParameters})
+					if(filter !== undefined) where = 'where ' + filter + ' '
+				}
+
+				let query
+				const col = (this.column !== undefined)?cols[this.column].id:'A'
+				if(this.inputs.aggType === undefined || this.inputs.aggType === 'unique') query = `select ${col}, count(${col}) group by ${col} ${where}`
+				else if(this.inputs.aggType === 'count') query = `select count(${col}) ${where}`
+				else if(this.inputs.aggType === 'min') query = `select min(${col}) ${where}`
+				else if(this.inputs.aggType === 'max') query = `select max(${col}) ${where}`
+
+			
+				const parser = new PublicGoogleSheetsParser(this.inputs.sheetId,this.inputs.sheetName,query)
 				parser.parse().then(({rows,cols}) => {
-					const results = Noodl.Array.get()
-					results.set(rows.map((r) => {
-						let obj = Noodl.Object.create({Value:r[this.column],Label:r[this.column]})
-						return obj
-					}))
+					if(this.inputs.aggType === undefined || this.inputs.aggType === 'unique') {
+						this.result = Noodl.Array.get()
+						const column = this.column!==undefined?this.column:cols[0].label
+						this.result.set(rows.map((r) => {
+							let obj = Noodl.Object.create({Value:r[column],Label:r[column]})
+							return obj
+						}))
+					}
+					else {
+						const aggKey = Object.keys(rows[0])
+						this.result = rows[0][aggKey[0]]
+					}
 	
-					this.setOutputs({
-						result:results,
-						count:results.size(),
-						firstItemId:(results.size() > 0)?results.get(0).getId():undefined
-					})
+					if(this.hasOutput('result')) this.flagOutputDirty('result')
 					this.sendSignalOnOutput('success')
 				})
 			})
@@ -456,11 +478,42 @@ const QuerySheetUniqueColumnNode = Noodl.defineNode({
 			if(name === 'column') this.registerInput(name, {
 				set: this.setColumn.bind(this)
 			})
-		},		
+
+			if(name === 'visualFilter') this.registerInput(name, {
+				set: this.setFilter.bind(this)
+			})
+
+			if(name.startsWith('qp-')) return this.registerInput(name, {
+                set: this.setQueryParameter.bind(this, name.substring('qp-'.length))
+            })
+		},	
+		setFilter(value) {
+			this.filter = value
+			if(this.isInputConnected('Do') === false)
+				this.scheduleQuery()
+		},
+		setQueryParameter(name,value) {
+			this.queryParameters[name] = value;
+
+            if(this.isInputConnected('Do') === false)
+                this.scheduleQuery()
+		},	
 		setColumn(value) {
 			this.column = value
 			if(this.isInputConnected('Do') === false)
 				this.scheduleQuery()
+		},
+		registerOutputIfNeeded: function (name) {
+			if (this.hasOutput(name)) {
+				return;
+			}
+
+			if(name === 'result') this.registerOutput(name, {
+				getter: this.getResult.bind(this)
+			})
+		},
+		getResult() {
+			return this.result
 		}
 	},
 	setup: function (context, graphModel) {
@@ -471,7 +524,7 @@ const QuerySheetUniqueColumnNode = Noodl.defineNode({
 		if(_schemas === undefined) _schemas = {}
 		if(_schemaEvents === undefined) _schemaEvents = new EventEmitter()
 
-		graphModel.on("nodeAdded.noodl.gsheets.QuerySheetUniqueColumnNode", function (node) {
+		graphModel.on("nodeAdded.noodl.gsheets.QuerySheetAggregateNode", function (node) {
 
 			function updatePorts() {
 				var ports = []
@@ -488,6 +541,35 @@ const QuerySheetUniqueColumnNode = Noodl.defineNode({
 				if(node.parameters['sheetId'] !== undefined && node.parameters['sheetName'] !== undefined) {
 					const schema = {properties:_schemas[node.parameters.sheetName||'_Default']}
 
+					ports.push({
+						name:'visualFilter',
+						plug:'input',
+						type:{name:'query-filter',schema:schema,allowEditOnly:true},
+						displayName:'Filter',
+						group:'Filter',
+					})
+
+					if(node.parameters.visualFilter !== undefined) {
+						// Find all input ports
+						const uniqueInputs = {}
+						function _collectInputs(query) {
+							if(query === undefined) return;
+							if(query.rules !== undefined) query.rules.forEach((r) => _collectInputs(r))
+							else if(query.input !== undefined) uniqueInputs[query.input] = true;
+						}
+		
+						_collectInputs(node.parameters.visualFilter)
+						Object.keys(uniqueInputs).forEach((input) => {
+							ports.push({
+								name:'qp-' + input,
+								plug:'input',
+								type:'*',
+								displayName:input,
+								group:'Query Parameters',
+							})
+						})
+					}
+
 					const columnForIdEnums = Object.keys(schema.properties).map(k => ({value:k,label:k}))
 					if(columnForIdEnums.length > 0) {
 						ports.push({
@@ -498,6 +580,13 @@ const QuerySheetUniqueColumnNode = Noodl.defineNode({
 							group:'Sheet Source',
 							default:columnForIdEnums[0].value
 						})
+					}
+
+					if(node.parameters['aggType'] === undefined || node.parameters['aggType'] === 'unique') {
+						ports.push({displayName:'Result',group:'General',type:'array',plug:'output',name:'result'})
+					}
+					else {
+						ports.push({displayName:'Result',group:'General',type:'number',plug:'output',name:'result'})
 					}
 				}
 
@@ -516,6 +605,8 @@ const QuerySheetUniqueColumnNode = Noodl.defineNode({
 						updatePorts();
 					})
 				}
+
+				if(event.name === "aggType" || event.name === "visualFilter") updatePorts();
 			})
 		})
 	}
@@ -631,7 +722,7 @@ const SheetRowNode = Noodl.defineNode({
 Noodl.defineModule({
     nodes:[
 		QuerySheetNode,
-		QuerySheetUniqueColumnNode,
+		QuerySheetAggregateNode,
 		SheetRowNode
     ],
     setup() {
