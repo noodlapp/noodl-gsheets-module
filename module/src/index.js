@@ -28,6 +28,31 @@ function _addSheetToSchemas(id,sheet,cb) {
 	})
 }
 
+const _colsCache = {}
+function _getColumns(sheetId,sheetName,cb) {
+	if(_colsCache[sheetId] !== undefined && _colsCache[sheetId][sheetName] !== undefined) {
+		if(_colsCache[sheetId][sheetName]._cbs !== undefined) {
+			_colsCache[sheetId][sheetName]._cbs.push(cb)
+			return
+		}
+		else return cb(_colsCache[sheetId][sheetName])
+	}
+		
+	if(_colsCache[sheetId] === undefined) _colsCache[sheetId] = {}
+	
+	_colsCache[sheetId][sheetName] = {_cbs:[cb]}
+
+	const parser = new PublicGoogleSheetsParser(sheetId,sheetName,"limit 0")
+	parser.parse().then(({rows,cols}) => {
+		const _cols = {}
+		cols.forEach(c => _cols[c.label] = c)
+		
+		const _cbs = _colsCache[sheetId][sheetName]._cbs
+		_colsCache[sheetId][sheetName] = _cols
+		_cbs.forEach(cb => cb(_cols))
+	})
+}
+
 function _formatFilter(query,options) {
 	var inputs = options.queryParameters;
 
@@ -117,21 +142,12 @@ const QuerySheetNode = Noodl.defineNode({
             this.setOutputs({error:err})
             this.sendSignalOnOutput('failure');
         },
-		_getColumns(cb) {
-			if(this.cols !== undefined) return cb(this.cols)
-			const parser = new PublicGoogleSheetsParser(this.inputs.sheetId,this.inputs.sheetName,"limit 0")
-			parser.parse().then(({rows,cols}) => {
-				this.cols = {}
-				cols.forEach(c => this.cols[c.label] = c)
-				cb(this.cols)
-			})
-		},
 		runQuery() {
 			if(this.inputs.sheetId === undefined || this.inputs.sheetName === undefined) {
 				return
 			}
 
-			this._getColumns((cols) => {
+			_getColumns(this.inputs.sheetId,this.inputs.sheetName,(cols) => {
 				// Generate the query from the visual filter
 				let query
 				if(this.filter !== undefined) {
@@ -425,17 +441,8 @@ const QuerySheetAggregateNode = Noodl.defineNode({
 				this.runQuery()
 			})
 		},
-		_getColumns(cb) {
-			if(this.cols !== undefined) return cb(this.cols)
-			const parser = new PublicGoogleSheetsParser(this.inputs.sheetId,this.inputs.sheetName,"limit 0")
-			parser.parse().then(({rows,cols}) => {
-				this.cols = {}
-				cols.forEach(c => this.cols[c.label] = c)
-				cb(this.cols)
-			})
-		},
 		runQuery() {
-			this._getColumns((cols) => {
+			_getColumns(this.inputs.sheetId,this.inputs.sheetName,(cols) => {
 				let where = ''
 				if(this.filter !== undefined) {
 					const filter = _formatFilter(this.filter,{cols,queryParameters:this.queryParameters})
