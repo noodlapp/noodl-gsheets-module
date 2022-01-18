@@ -688,8 +688,7 @@ const SheetRowNode = Noodl.defineNode({
 						plug:'input',
 						type:{name:'enum',enums:sheets},
 						displayName:'Sheet',
-						group:'General',
-						default:sheets[0].value
+						group:'General'
 					})
 				}
 
@@ -722,6 +721,10 @@ const SheetRowNode = Noodl.defineNode({
 			updatePorts()
 			_schemaEvents.on('change',() => {
 				updatePorts()
+			})
+
+			node.on("parameterUpdated", function (event) {
+				updatePorts();
 			})
 		})
 	}
