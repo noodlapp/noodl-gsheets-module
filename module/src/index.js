@@ -19,6 +19,7 @@ function _addSheetToSchemas(id,sheet,cb) {
 
 		for(var i = 0; i < cols.length; i++) {
 			const key = cols[i].label
+			if(key === "") continue;
 			schema[key] = _types[cols[i].type]
 		}
 

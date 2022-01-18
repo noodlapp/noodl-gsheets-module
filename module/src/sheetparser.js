@@ -18,6 +18,7 @@ class PublicGoogleSheetsParser {
       if (this.query) {
         url = url.concat(`&tq=${encodeURIComponent(this.query)}`)
       }
+      url = url + '&headers=1'
 
       return fetch(url)
         .then((r) => r && r.ok && r.text ? r.text() : null)
