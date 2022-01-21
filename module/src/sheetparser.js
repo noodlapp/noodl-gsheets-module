@@ -32,7 +32,7 @@ class PublicGoogleSheetsParser {
     applyHeaderIntoRows (header, rows) {
       return rows
         .map(({ c: row }) => this.normalizeRow(row))
-        .map((row) => row.reduce((p, c, i) => c.v ? Object.assign(p, { [header[i]]: c.v }) : p, {}))
+        .map((row) => row.reduce((p, c, i) => (c.v !== undefined) ? Object.assign(p, { [header[i]]: c.v }) : p, {}))
     }
   
     getItems (spreadsheetResponse) {

@@ -64,17 +64,21 @@ function _formatFilter(query,options) {
 		   var _res = '('
 		   query.rules.forEach((r,idx) => {
 			   var cond = _formatFilter(r,options)
-			   if(cond !== undefined) _res += cond
-			   if(idx < query.rules.length-1) _res += query.combinator + ' '
+			   if(cond !== undefined) {
+				   _res += cond
+			   		if(idx < query.rules.length-1) _res += query.combinator + ' '
+			   }
 		   })
 		   _res += ')'
 
 		   return _res;
 	   }
    }
-   else {
+   else if(query.property !== undefined) {
 	   var cond;
 	   var value = query.input!==undefined?inputs[query.input]:query.value;
+
+		if(value === undefined) return
 
 	   if(typeof value === 'string') value = "'" + value + "'"
 
@@ -106,8 +110,8 @@ const QuerySheetNode = Noodl.defineNode({
 	},
 	outputs:{
 		result:{displayName:'Items',group:'General',type:'array'},
-		count:{displayName:'Count',group:'General',type:'array'},
-		firstItemId:{displayName:'First Item Id',group:'General',type:'array'},
+		count:{displayName:'Count',group:'General',type:'number'},
+		firstItemId:{displayName:'First Item Id',group:'General',type:'string'},
 
 		success:{displayName:'Success',group:'Events',type:'signal'},
 		failure:{displayName:'Failure',group:'Events',type:'signal'},
@@ -176,7 +180,6 @@ const QuerySheetNode = Noodl.defineNode({
 						let _id
 						if(this.useColumnForId !== undefined && this.useColumnForId !== '__none__') {
 							_id = r[this.useColumnForId]
-							delete r[this.useColumnForId]
 						}
 
 						// Convert dates
